@@ -58,6 +58,8 @@ pub struct ModelInfo {
     pub name: &'static str,
     pub description: &'static str,
     pub repo: &'static str,
+    /// Pinned Hugging Face commit, so files can never change underneath us.
+    pub revision: &'static str,
     /// (file name, expected size in bytes)
     pub files: &'static [(&'static str, u64)],
 }
@@ -87,6 +89,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "Parakeet v2 (English)",
         description: "Most accurate for English. Punctuation and capitals included.",
         repo: "istupakov/parakeet-tdt-0.6b-v2-onnx",
+        revision: "0bbb45a3365852604aef28b538a8f066f4ccaa85",
         files: &[
             ("encoder-model.int8.onnx", 652_184_014),
             ("decoder_joint-model.int8.onnx", 8_998_286),
@@ -99,6 +102,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "Parakeet v3 (25 languages)",
         description: "Multilingual with automatic language detection.",
         repo: "istupakov/parakeet-tdt-0.6b-v3-onnx",
+        revision: "8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce",
         files: &[
             ("encoder-model.int8.onnx", 652_183_999),
             ("decoder_joint-model.int8.onnx", 18_202_004),
@@ -171,25 +175,49 @@ impl Default for Config {
 impl Config {
     /// Load the config, falling back to defaults on any problem. Never fails.
     pub fn load() -> Self {
+        Self::try_load().unwrap_or_else(|err| {
+            tracing::warn!("{err}. Using defaults.");
+            Self::default()
+        })
+    }
+
+    /// Load the config; a missing file is the defaults, a broken one is an
+    /// error. Editors use this so they never overwrite a file the user is
+    /// halfway through fixing by hand.
+    pub fn try_load() -> anyhow::Result<Self> {
         let path = config_path();
         match std::fs::read_to_string(&path) {
-            Ok(text) => match toml::from_str(&text) {
-                Ok(cfg) => cfg,
-                Err(err) => {
-                    tracing::warn!("Invalid {}: {err}. Using defaults.", path.display());
-                    Self::default()
-                }
-            },
-            Err(_) => Self::default(),
+            Ok(text) => toml::from_str(&text)
+                .map_err(|err| anyhow::anyhow!("Invalid {}: {err}", path.display())),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(err) => Err(anyhow::anyhow!("Can't read {}: {err}", path.display())),
         }
+    }
+
+    /// Read the file, apply `edit`, and write it back atomically. Re-reading
+    /// first means two windows editing different settings don't undo each other.
+    pub fn update(edit: impl FnOnce(&mut Config)) -> anyhow::Result<Config> {
+        let mut cfg = Self::try_load()?;
+        edit(&mut cfg);
+        cfg.save()?;
+        Ok(cfg)
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
         let path = config_path();
         std::fs::create_dir_all(config_dir())?;
-        let tmp = path.with_extension("toml.tmp");
+        // Unique temp name so concurrent writers never clobber each other's
+        // temp file; rename is atomic, so readers see old or new, never half.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let tmp = path.with_extension(format!("toml.{}.{nanos}.tmp", std::process::id()));
         std::fs::write(&tmp, toml::to_string_pretty(self)?)?;
-        std::fs::rename(tmp, path)?;
+        if let Err(err) = std::fs::rename(&tmp, &path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(err.into());
+        }
         Ok(())
     }
 }

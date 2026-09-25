@@ -44,6 +44,10 @@ pub struct SettingsApp {
     state: State,
     detail: String,
     connected: bool,
+    /// Set when config.toml can't be parsed; saving is refused until it's fixed.
+    config_error: Option<String>,
+    /// Bumped on every replacement keystroke; only the last one saves.
+    repl_generation: u64,
 
     hotkey_labels: Vec<String>,
     model_labels: Vec<String>,
@@ -66,21 +70,26 @@ pub enum Message {
     ReplTo(usize, String),
     ReplRemove(usize),
     ReplAdd,
+    SaveReplacements(u64),
     RestartEngine,
     OpenConfigFile,
     Noop,
 }
 
 impl SettingsApp {
-    fn save(&mut self) -> Task<Message> {
-        self.cfg.replacements = self
-            .replacements
-            .iter()
-            .filter(|(from, _)| !from.trim().is_empty())
-            .map(|(from, to)| (from.trim().to_string(), to.clone()))
-            .collect();
-        if let Err(err) = self.cfg.save() {
-            tracing::warn!("could not save config: {err}");
+    /// Apply one change on top of the latest file contents, so edits made
+    /// elsewhere (the panel popup, a text editor) are never overwritten.
+    fn apply(&mut self, edit: impl FnOnce(&mut Config)) -> Task<Message> {
+        match Config::update(edit) {
+            Ok(cfg) => {
+                self.cfg = cfg;
+                self.config_error = None;
+            }
+            Err(err) => {
+                tracing::warn!("could not save config: {err}");
+                self.config_error = Some(format!("{err:#}"));
+                return Task::none();
+            }
         }
         match self.proxy.clone() {
             Some(p) => cosmic::task::future(async move {
@@ -89,6 +98,26 @@ impl SettingsApp {
             }),
             None => Task::none(),
         }
+    }
+
+    fn save_replacements(&mut self) -> Task<Message> {
+        let map: std::collections::BTreeMap<String, String> = self
+            .replacements
+            .iter()
+            .filter(|(from, _)| !from.trim().is_empty())
+            .map(|(from, to)| (from.trim().to_string(), to.clone()))
+            .collect();
+        self.apply(move |c| c.replacements = map)
+    }
+
+    /// Save replacements shortly after typing stops, not on every keystroke.
+    fn save_replacements_soon(&mut self) -> Task<Message> {
+        self.repl_generation += 1;
+        let generation = self.repl_generation;
+        cosmic::task::future(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+            Message::SaveReplacements(generation)
+        })
     }
 
     fn hotkey_index(&self) -> Option<usize> {
@@ -144,7 +173,10 @@ impl cosmic::Application for SettingsApp {
 
     fn init(mut core: Core, _flags: ()) -> (Self, Task<Message>) {
         core.window.show_context = false;
-        let cfg = Config::load();
+        let (cfg, config_error) = match Config::try_load() {
+            Ok(cfg) => (cfg, None),
+            Err(err) => (Config::default(), Some(format!("{err:#}"))),
+        };
         let mut replacements: Vec<(String, String)> = cfg
             .replacements
             .iter()
@@ -161,6 +193,8 @@ impl cosmic::Application for SettingsApp {
             state: State::Starting,
             detail: String::new(),
             connected: false,
+            config_error,
+            repl_generation: 0,
             hotkey_labels: HOTKEYS.iter().map(|(_, l)| l.to_string()).collect(),
             model_labels: MODELS.iter().map(|m| m.name.to_string()).collect(),
             tail_labels: TAIL_MS
@@ -202,57 +236,62 @@ impl cosmic::Application for SettingsApp {
                 _ => {}
             },
             Message::Hotkey(i) => {
-                self.cfg.hotkey = HOTKEYS[i].0.to_string();
-                return self.save();
+                let value = HOTKEYS[i].0.to_string();
+                return self.apply(move |c| c.hotkey = value);
             }
             Message::Model(i) => {
-                self.cfg.model = MODELS[i].id.to_string();
-                return self.save();
+                let value = MODELS[i].id.to_string();
+                return self.apply(move |c| c.model = value);
             }
             Message::Sounds(v) => {
-                self.cfg.sounds = v;
-                return self.save();
+                let value = v;
+                return self.apply(move |c| c.sounds = value);
             }
             Message::TrailingSpace(v) => {
-                self.cfg.trailing_space = v;
-                return self.save();
+                let value = v;
+                return self.apply(move |c| c.trailing_space = value);
             }
             Message::CancelOnOther(v) => {
-                self.cfg.cancel_on_other_key = v;
-                return self.save();
+                let value = v;
+                return self.apply(move |c| c.cancel_on_other_key = value);
             }
             Message::RemoveFillers(v) => {
-                self.cfg.remove_fillers = v;
-                return self.save();
+                let value = v;
+                return self.apply(move |c| c.remove_fillers = value);
             }
             Message::Tail(i) => {
-                self.cfg.release_tail_ms = TAIL_MS[i];
-                return self.save();
+                let value = TAIL_MS[i];
+                return self.apply(move |c| c.release_tail_ms = value);
             }
             Message::MinHold(i) => {
-                self.cfg.min_hold_ms = MIN_HOLD_MS[i];
-                return self.save();
+                let value = MIN_HOLD_MS[i];
+                return self.apply(move |c| c.min_hold_ms = value);
             }
             Message::ReplFrom(i, s) => {
                 if let Some(r) = self.replacements.get_mut(i) {
                     r.0 = s;
                 }
-                return self.save();
+                return self.save_replacements_soon();
             }
             Message::ReplTo(i, s) => {
                 if let Some(r) = self.replacements.get_mut(i) {
                     r.1 = s;
                 }
-                return self.save();
+                return self.save_replacements_soon();
             }
             Message::ReplRemove(i) => {
                 if i < self.replacements.len() {
                     self.replacements.remove(i);
                 }
-                return self.save();
+                return self.save_replacements();
             }
             Message::ReplAdd => {
                 self.replacements.push((String::new(), String::new()));
+            }
+            Message::SaveReplacements(generation) => {
+                if generation == self.repl_generation {
+                    return self.save_replacements();
+                }
             }
             Message::RestartEngine => {
                 if let Some(p) = self.proxy.clone() {
@@ -419,7 +458,33 @@ impl cosmic::Application for SettingsApp {
                     .control(button::text("Open config file").on_press(Message::OpenConfigFile)),
             );
 
-        let content = column![header, dictation, timing, replacements, engine]
+        let mut content = column![header];
+        if let Some(err) = &self.config_error {
+            content = content.push(
+                container(text::body(format!(
+                    "Your config file has an error, so changes here won't be saved until it's fixed.\n{err}"
+                )))
+                .padding(spacing.space_s)
+                .width(Length::Fill)
+                .class(theme::Container::custom(|t: &cosmic::Theme| {
+                    let mut bg: cosmic::iced::Color = t.cosmic().warning_color().into();
+                    bg.a = 0.18;
+                    container::Style {
+                        background: Some(cosmic::iced::Background::Color(bg)),
+                        border: cosmic::iced::Border {
+                            radius: 8.0.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }
+                })),
+            );
+        }
+        let content = content
+            .push(dictation)
+            .push(timing)
+            .push(replacements)
+            .push(engine)
             .spacing(spacing.space_l)
             .padding([spacing.space_l, spacing.space_l])
             .max_width(760);

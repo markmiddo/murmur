@@ -14,7 +14,7 @@ use crate::Event;
 use crate::audio::TARGET_RATE;
 
 enum Cmd {
-    Load(&'static ModelInfo),
+    Load(&'static ModelInfo, u64),
     Transcribe { seq: u64, samples: Vec<f32> },
 }
 
@@ -33,8 +33,8 @@ impl Engine {
         Self { tx }
     }
 
-    pub fn load(&self, model: &'static ModelInfo) {
-        let _ = self.tx.send(Cmd::Load(model));
+    pub fn load(&self, model: &'static ModelInfo, generation: u64) {
+        let _ = self.tx.send(Cmd::Load(model, generation));
     }
 
     pub fn transcribe(&self, seq: u64, samples: Vec<f32>) {
@@ -46,16 +46,16 @@ fn run(rx: Receiver<Cmd>, events: UnboundedSender<Event>) {
     let mut model: Option<ParakeetTDT> = None;
     while let Ok(cmd) = rx.recv() {
         match cmd {
-            Cmd::Load(info) => {
+            Cmd::Load(info, generation) => {
                 model = None;
-                match prepare(info, &events) {
+                match prepare(info, generation, &events) {
                     Ok(m) => {
                         model = Some(m);
-                        let _ = events.send(Event::ModelReady);
+                        let _ = events.send(Event::ModelReady(generation));
                     }
                     Err(err) => {
                         tracing::error!("Model failed: {err:#}");
-                        let _ = events.send(Event::ModelFailed(format!("{err:#}")));
+                        let _ = events.send(Event::ModelFailed(generation, format!("{err:#}")));
                     }
                 }
             }
@@ -73,15 +73,32 @@ fn run(rx: Receiver<Cmd>, events: UnboundedSender<Event>) {
     }
 }
 
-fn prepare(info: &'static ModelInfo, events: &UnboundedSender<Event>) -> Result<ParakeetTDT> {
+fn prepare(
+    info: &'static ModelInfo,
+    generation: u64,
+    events: &UnboundedSender<Event>,
+) -> Result<ParakeetTDT> {
     if !info.is_installed() {
-        download(info, events)?;
+        download(info, generation, events)?;
     }
-    let _ = events.send(Event::Loading);
+    let _ = events.send(Event::Loading(generation));
     let t = Instant::now();
-    let mut m = ParakeetTDT::from_pretrained(info.dir(), None)
-        .map_err(|e| anyhow!("{e}"))
-        .context("Could not load speech model")?;
+    let mut m = match ParakeetTDT::from_pretrained(info.dir(), None) {
+        Ok(m) => m,
+        Err(err) => {
+            // Right size but unloadable means corrupt: delete it so Retry
+            // downloads a fresh copy instead of failing forever.
+            tracing::warn!(
+                "Removing unloadable model files in {}",
+                info.dir().display()
+            );
+            for (name, _) in info.files {
+                let _ = std::fs::remove_file(info.dir().join(name));
+            }
+            return Err(anyhow!("{err}"))
+                .context("Could not load speech model (it will re-download on retry)");
+        }
+    };
     // Warm up so the first real dictation is as fast as the rest.
     let _ = m.transcribe_samples(vec![0.0; TARGET_RATE as usize], TARGET_RATE, 1, None);
     tracing::info!("Loaded {} in {:?}", info.name, t.elapsed());
@@ -132,13 +149,29 @@ pub fn transcribe_file(path: &std::path::Path) -> Result<String> {
     transcribe(&mut m, samples)
 }
 
-fn download(info: &'static ModelInfo, events: &UnboundedSender<Event>) -> Result<()> {
+/// Bytes fetched per HTTP request. Each request has a body timeout, so a
+/// stalled connection costs at most one chunk's timeout before a retry.
+const CHUNK: u64 = 32 << 20;
+const RETRIES: u32 = 6;
+
+fn download(
+    info: &'static ModelInfo,
+    generation: u64,
+    events: &UnboundedSender<Event>,
+) -> Result<()> {
     let dir = info.dir();
     std::fs::create_dir_all(&dir)?;
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(std::time::Duration::from_secs(20)))
+        .timeout_recv_response(Some(std::time::Duration::from_secs(30)))
+        .timeout_recv_body(Some(std::time::Duration::from_secs(180)))
+        .build()
+        .into();
     let total = info.total_bytes();
     let mut done: u64 = 0;
     tracing::info!("Downloading {} ({} MB)", info.name, total / 1_000_000);
-    let _ = events.send(Event::Downloading(0.0));
+    let _ = events.send(Event::Downloading(generation, 0.0));
+    let mut last_report = Instant::now();
 
     for &(name, size) in info.files {
         let path = dir.join(name);
@@ -149,36 +182,75 @@ fn download(info: &'static ModelInfo, events: &UnboundedSender<Event>) -> Result
             done += size;
             continue;
         }
-        let url = format!("https://huggingface.co/{}/resolve/main/{name}", info.repo);
-        let resp = ureq::get(&url)
-            .call()
-            .with_context(|| format!("Download failed: {name}"))?;
-        let mut reader = resp.into_body().into_reader();
+        let url = format!(
+            "https://huggingface.co/{}/resolve/{}/{name}",
+            info.repo, info.revision
+        );
         let part = path.with_extension("part");
-        let mut file = std::fs::File::create(&part)?;
-        let mut buf = vec![0u8; 1 << 16];
-        let mut written: u64 = 0;
-        let mut last_report = Instant::now();
-        loop {
-            let n = reader.read(&mut buf)?;
-            if n == 0 {
-                break;
-            }
-            file.write_all(&buf[..n])?;
-            written += n as u64;
-            if last_report.elapsed().as_millis() > 250 {
-                last_report = Instant::now();
-                let _ = events.send(Event::Downloading((done + written) as f64 / total as f64));
+        // Resume a previous partial download.
+        let mut have = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+        if have > size {
+            have = 0;
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&part)?;
+        file.set_len(have)?;
+
+        let mut failures = 0;
+        while have < size {
+            let end = (have + CHUNK).min(size) - 1;
+            let result = (|| -> Result<u64> {
+                let resp = agent
+                    .get(&url)
+                    .header("Range", &format!("bytes={have}-{end}"))
+                    .call()?;
+                let mut reader = resp.into_body().into_reader();
+                let mut buf = vec![0u8; 1 << 16];
+                let mut got = 0u64;
+                loop {
+                    let n = reader.read(&mut buf)?;
+                    if n == 0 {
+                        break;
+                    }
+                    file.write_all(&buf[..n])?;
+                    got += n as u64;
+                    if last_report.elapsed().as_millis() > 250 {
+                        last_report = Instant::now();
+                        let p = (done + have + got) as f64 / total as f64;
+                        let _ = events.send(Event::Downloading(generation, p));
+                    }
+                }
+                Ok(got)
+            })();
+            match result {
+                Ok(got) if got == end - have + 1 => {
+                    have += got;
+                    failures = 0;
+                }
+                other => {
+                    // Keep whatever arrived; the next attempt resumes from there.
+                    file.flush()?;
+                    have = std::fs::metadata(&part)?.len();
+                    failures += 1;
+                    let why = match other {
+                        Ok(got) => format!("short read ({got} bytes)"),
+                        Err(e) => format!("{e:#}"),
+                    };
+                    tracing::warn!("Download of {name} interrupted: {why}");
+                    if failures >= RETRIES {
+                        return Err(anyhow!("Download failed: {why}"));
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(2u64.pow(failures)));
+                }
             }
         }
         file.sync_all()?;
-        if written != size {
-            let _ = std::fs::remove_file(&part);
-            return Err(anyhow!("{name} is {written} bytes, expected {size}"));
-        }
+        drop(file);
         std::fs::rename(&part, &path)?;
         done += size;
     }
-    let _ = events.send(Event::Downloading(1.0));
+    let _ = events.send(Event::Downloading(generation, 1.0));
     Ok(())
 }

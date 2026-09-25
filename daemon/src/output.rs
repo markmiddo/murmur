@@ -2,7 +2,8 @@
 
 use std::collections::BTreeMap;
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use regex::{Regex, RegexBuilder};
@@ -19,7 +20,19 @@ impl Replacer {
         let rules = pairs
             .into_iter()
             .filter_map(|(from, to)| {
-                let pattern = format!(r"\b{}\b", regex::escape(from.trim()));
+                let from = from.trim();
+                if from.is_empty() {
+                    return None;
+                }
+                // \b only means "word edge" next to a word character, so only
+                // add it on sides where the phrase starts/ends with one ("c++").
+                let is_word = |c: char| c.is_alphanumeric() || c == '_';
+                let pattern = format!(
+                    "{}{}{}",
+                    if from.starts_with(is_word) { r"\b" } else { "" },
+                    regex::escape(from),
+                    if from.ends_with(is_word) { r"\b" } else { "" },
+                );
                 RegexBuilder::new(&pattern)
                     .case_insensitive(true)
                     .build()
@@ -92,13 +105,32 @@ pub fn type_text(text: &str) -> Result<Delivery> {
     if let Some(display) = wayland_display() {
         cmd.env("WAYLAND_DISPLAY", display);
     }
-    match cmd.status() {
-        Ok(s) if s.success() => return Ok(Delivery::Typed),
-        Ok(s) => tracing::warn!("wtype exited with {s}"),
+    // Generous but bounded: a wedged wtype must never freeze the engine.
+    let limit = Duration::from_secs(10) + Duration::from_millis(20 * text.len() as u64);
+    match cmd.spawn().map(|child| wait_with_timeout(child, limit)) {
+        Ok(Ok(s)) if s.success() => return Ok(Delivery::Typed),
+        Ok(Ok(s)) => tracing::warn!("wtype exited with {s}"),
+        // Some text may already be typed, so don't also paste it.
+        Ok(Err(err)) => return Err(err),
         Err(err) => tracing::warn!("wtype not available: {err}"),
     }
     copy_to_clipboard(text)?;
     Ok(Delivery::Clipboard)
+}
+
+fn wait_with_timeout(mut child: Child, limit: Duration) -> Result<ExitStatus> {
+    let deadline = Instant::now() + limit;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(anyhow!("typing took longer than {limit:?} and was stopped"));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// The session's Wayland socket. If we were started before the session
@@ -139,7 +171,11 @@ pub fn copy_to_clipboard(text: &str) -> Result<()> {
         .take()
         .ok_or_else(|| anyhow!("no stdin"))?
         .write_all(text.as_bytes())?;
-    child.wait()?;
+    // wl-copy forks to serve the clipboard; the parent's status says whether it worked.
+    let status = wait_with_timeout(child, Duration::from_secs(5))?;
+    if !status.success() {
+        return Err(anyhow!("wl-copy exited with {status}"));
+    }
     Ok(())
 }
 
@@ -220,6 +256,13 @@ mod tests {
             strip_fillers("Yeah, humming along."),
             "Yeah, humming along."
         );
+    }
+
+    #[test]
+    fn empty_and_symbol_rules() {
+        let r = replacer(&[("", "x"), ("c plus plus", "C++"), ("c++", "C++")]);
+        assert_eq!(r.apply("the c plus plus way"), "the C++ way");
+        assert_eq!(r.apply("I like c++ a lot"), "I like C++ a lot");
     }
 
     #[test]

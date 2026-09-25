@@ -6,7 +6,6 @@ mod hotkey;
 mod output;
 
 use std::collections::VecDeque;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -22,7 +21,9 @@ use crate::engine::Engine;
 use crate::output::{Delivery, Replacer};
 
 const HISTORY_LEN: usize = 20;
-const HEARTBEAT_STALE_SECS: u64 = 20;
+const HEARTBEAT_STALE: Duration = Duration::from_secs(20);
+/// Auto-stop a recording after this long (e.g. a forgotten "Dictate now").
+const MAX_RECORDING: Duration = Duration::from_secs(300);
 
 /// Everything that can happen, funnelled into one controller loop.
 #[derive(Debug)]
@@ -33,15 +34,18 @@ pub enum Event {
     KeyboardsMissing(String),
     KeyboardsOk,
     Level(f32),
-    Downloading(f64),
-    Loading,
-    ModelReady,
-    ModelFailed(String),
+    // Model events carry the load generation so a slow, superseded load
+    // can't mark a newer one ready or failed.
+    Downloading(u64, f64),
+    Loading(u64),
+    ModelReady(u64),
+    ModelFailed(u64, String),
     Transcribed {
         seq: u64,
         result: Result<String, String>,
     },
     FinishRecording(u64),
+    MaxLength(u64),
     // From D-Bus
     Toggle,
     SetEnabled(bool),
@@ -139,6 +143,7 @@ impl Service {
 
 struct Recording {
     started: Instant,
+    released: Option<Instant>,
     seq: u64,
     from_hotkey: bool,
     finishing: bool,
@@ -157,6 +162,7 @@ struct Controller {
 
     enabled: bool,
     model_ready: bool,
+    model_gen: u64,
     model_state: (State, String),
     keyboard_error: Option<String>,
     recording: Option<Recording>,
@@ -232,7 +238,20 @@ impl Controller {
     }
 
     fn start_recording(&mut self, from_hotkey: bool) {
-        if !self.enabled || self.recording.is_some() {
+        if !self.enabled {
+            return;
+        }
+        // Pressed again during the release tail: wrap up the previous
+        // dictation now so this press gets a recording of its own.
+        if let Some(seq) = self
+            .recording
+            .as_ref()
+            .filter(|r| r.finishing)
+            .map(|r| r.seq)
+        {
+            self.finish(seq);
+        }
+        if self.recording.is_some() {
             return;
         }
         if !self.model_ready {
@@ -248,9 +267,15 @@ impl Controller {
                 self.level = 0.0;
                 self.recording = Some(Recording {
                     started: Instant::now(),
+                    released: None,
                     seq: self.next_seq,
                     from_hotkey,
                     finishing: false,
+                });
+                let (seq, tx) = (self.next_seq, self.events.clone());
+                tokio::spawn(async move {
+                    tokio::time::sleep(MAX_RECORDING).await;
+                    let _ = tx.send(Event::MaxLength(seq));
                 });
             }
             Err(err) => self.fail(&format!("{err:#}")),
@@ -266,6 +291,7 @@ impl Controller {
             return;
         }
         rec.finishing = true;
+        rec.released = Some(Instant::now());
         let seq = rec.seq;
         let tail = Duration::from_millis(self.cfg.release_tail_ms);
         let tx = self.events.clone();
@@ -279,16 +305,18 @@ impl Controller {
         let Some(rec) = self.recording.take_if(|r| r.seq == seq) else {
             return;
         };
-        let held = rec.started.elapsed();
+        let recorded = rec.started.elapsed();
+        // How long the key was actually held, not counting the release tail.
+        let held = rec.released.unwrap_or_else(Instant::now) - rec.started;
         let mut samples = self.audio.stop();
         if held < Duration::from_millis(self.cfg.min_hold_ms) {
             return; // accidental tap
         }
         let got = Duration::from_secs_f32(samples.len() as f32 / audio::TARGET_RATE as f32);
-        // The recorder should have delivered roughly the whole hold. If it
+        // The recorder should have delivered roughly the whole recording. If it
         // didn't, the microphone stalled: say so instead of transcribing scraps.
-        if got < held.mul_f32(0.5) {
-            tracing::warn!("Microphone delivered {got:?} of {held:?}");
+        if got < recorded.mul_f32(0.5) {
+            tracing::warn!("Microphone delivered {got:?} of {recorded:?}");
             self.fail("Microphone didn't pick anything up. Check your input device.");
             return;
         }
@@ -377,8 +405,10 @@ impl Controller {
 
     fn load_model(&mut self) {
         self.model_ready = false;
+        self.model_gen += 1;
         self.model_state = (State::Loading, "Loading speech model…".into());
-        self.engine.load(model_by_id(&self.cfg.model));
+        self.engine
+            .load(model_by_id(&self.cfg.model), self.model_gen);
     }
 
     async fn handle(&mut self, ev: Event) {
@@ -402,17 +432,26 @@ impl Controller {
             Event::KeyboardsMissing(msg) => self.keyboard_error = Some(msg),
             Event::KeyboardsOk => self.keyboard_error = None,
             Event::Level(l) => self.level = (l as f64 * 100.0).round() / 100.0,
-            Event::Downloading(p) => {
+            Event::Downloading(g, _)
+            | Event::Loading(g)
+            | Event::ModelReady(g)
+            | Event::ModelFailed(g, _)
+                if g != self.model_gen =>
+            {
+                tracing::debug!("Ignoring event from superseded model load {g}");
+            }
+            Event::Downloading(_, p) => {
                 self.model_state = (
                     State::Downloading,
                     format!("Downloading speech model… {:.0}%", p * 100.0),
                 );
             }
-            Event::Loading => {
+            Event::Loading(_) => {
                 self.model_state = (State::Loading, "Loading speech model…".into());
             }
-            Event::ModelReady => self.model_ready = true,
-            Event::ModelFailed(err) => {
+            Event::ModelReady(_) => self.model_ready = true,
+            Event::ModelFailed(_, err) => {
+                self.model_ready = false;
                 self.model_state = (State::Error, format!("Speech model failed: {err}"));
             }
             Event::Transcribed { seq: _, result } => {
@@ -423,6 +462,16 @@ impl Controller {
                 }
             }
             Event::FinishRecording(seq) => self.finish(seq),
+            Event::MaxLength(seq) => {
+                if self
+                    .recording
+                    .as_ref()
+                    .is_some_and(|r| r.seq == seq && !r.finishing)
+                {
+                    tracing::warn!("Recording hit the {MAX_RECORDING:?} limit");
+                    self.release();
+                }
+            }
             Event::Toggle => {
                 if self.recording.is_some() {
                     self.release();
@@ -510,6 +559,7 @@ async fn run() -> Result<()> {
         published: Status::default(),
         enabled: true,
         model_ready: false,
+        model_gen: 0,
         model_state: (State::Starting, "Starting…".into()),
         keyboard_error: None,
         recording: None,
@@ -530,8 +580,7 @@ async fn run() -> Result<()> {
         tokio::select! {
             Some(ev) = rx.recv() => ctl.handle(ev).await,
             _ = watchdog.tick() => {
-                let beat = hotkey::HEARTBEAT.load(Ordering::Relaxed);
-                if beat != 0 && hotkey::now_secs().saturating_sub(beat) > HEARTBEAT_STALE_SECS {
+                if hotkey::heartbeat_age().is_some_and(|age| age > HEARTBEAT_STALE) {
                     anyhow::bail!("Keyboard listener stopped responding");
                 }
             }

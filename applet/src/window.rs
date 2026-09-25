@@ -114,10 +114,9 @@ impl Window {
     }
 
     fn edit_config(&self, edit: impl FnOnce(&mut Config)) -> Task<Message> {
-        let mut cfg = Config::load();
-        edit(&mut cfg);
-        if let Err(err) = cfg.save() {
+        if let Err(err) = Config::update(edit) {
             tracing::warn!("could not save config: {err}");
+            return Task::none();
         }
         self.call(|p| async move { p.reload_config().await })
     }

@@ -261,10 +261,12 @@ fn play_tone(tone: Tone) -> Result<()> {
         .iter()
         .flat_map(|s| s.to_le_bytes())
         .collect();
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(&bytes)?;
-    }
+    let written = child.stdin.take().map(|mut stdin| stdin.write_all(&bytes));
+    // Always reap, even if the write failed, so no zombies pile up.
     child.wait()?;
+    if let Some(Err(err)) = written {
+        return Err(err.into());
+    }
     Ok(())
 }
 
