@@ -4,13 +4,13 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
   <name>Murmur</name>
-  <summary>Private voice dictation for your panel</summary>
+  <summary>Private voice dictation for the COSMIC™ desktop</summary>
   <developer id="io.github.markmiddo">
     <name>Mark Middo</name>
   </developer>
   <description>
     <p>
-      Murmur puts voice dictation in your COSMIC panel. Hold Right Alt, say what
+      Murmur puts voice dictation in your panel on the COSMIC™ desktop. Hold Right Alt, say what
       you want to write, and let go. Your words are typed into whatever window
       you are using, with punctuation and capitals.
     </p>
@@ -78,6 +78,12 @@
     <keyword>COSMIC</keyword>
   </keywords>
   <releases>
+    <release version="0.1.1" date="2026-09-26">
+      <url type="details">https://github.com/markmiddo/murmur/releases/tag/v0.1.1</url>
+      <description>
+        <p>Store listing now shows the panel applet, and wording follows the COSMIC™ trademark policy.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-09-26">
       <url type="details">https://github.com/markmiddo/murmur/releases/tag/v0.1.0</url>
       <description>
@@ -85,7 +91,7 @@
         <ul>
           <li>Push-to-talk dictation typed into the focused window</li>
           <li>On-device Parakeet speech models, English and multilingual</li>
-          <li>COSMIC panel applet with live level meter and recent dictations</li>
+          <li>Panel applet with live level meter and recent dictations</li>
           <li>Settings window with word replacements</li>
         </ul>
       </description>

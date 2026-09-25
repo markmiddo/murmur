@@ -129,7 +129,7 @@
   </g>
   <text x="84" y="340" font-family="Fira Sans" font-weight="800" font-size="104" fill="#ffffff" letter-spacing="-2">Murmur</text>
   <text x="88" y="400" font-family="Fira Sans" font-weight="500" font-size="36" fill="#e2dcff">Hold a key. Speak. It types.</text>
-  <text x="88" y="446" font-family="Fira Sans" font-size="24" fill="#a79fd0">Private, on-device voice dictation for COSMIC</text>
+  <text x="88" y="446" font-family="Fira Sans" font-size="22" fill="#a79fd0">Private, on-device voice dictation for the COSMIC™ desktop</text>
 
   <g font-family="Fira Sans" font-size="19" font-weight="600" fill="#e9e4ff">
     <rect x="88" y="492" width="150" height="40" rx="20" fill="#ffffff" fill-opacity="0.07" stroke="#ffffff" stroke-opacity="0.14"/>

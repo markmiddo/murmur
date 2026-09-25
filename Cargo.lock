@@ -3379,7 +3379,7 @@ dependencies = [
 
 [[package]]
 name = "murmur-applet"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3394,7 +3394,7 @@ dependencies = [
 
 [[package]]
 name = "murmur-common"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "dirs",
@@ -3405,7 +3405,7 @@ dependencies = [
 
 [[package]]
 name = "murmurd"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",

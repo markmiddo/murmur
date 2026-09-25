@@ -4,6 +4,13 @@ All notable changes to Murmur are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org).
 
+## [0.1.1] - 2026-09-26
+
+### Changed
+
+- The store listing now leads with a screenshot of the panel applet.
+- Wording now follows the COSMIC™ trademark policy for third-party apps.
+
 ## [0.1.0] - 2026-09-26
 
 First release.

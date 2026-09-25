@@ -5,14 +5,14 @@
 [![CI](https://github.com/markmiddo/murmur/actions/workflows/ci.yml/badge.svg)](https://github.com/markmiddo/murmur/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/markmiddo/murmur)](https://github.com/markmiddo/murmur/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![Platform: COSMIC](https://img.shields.io/badge/desktop-COSMIC-8b5cf6.svg)
+![For the COSMIC™ desktop](https://img.shields.io/badge/for-COSMIC%E2%84%A2%20desktop-8b5cf6.svg)
 ![Rust](https://img.shields.io/badge/rust-2024-orange.svg)
 
 </div>
 
 ---
 
-Murmur lives in your COSMIC panel. Hold **Right Alt**, say what you want to
+Murmur is voice dictation for the COSMIC™ desktop. It lives in your panel. Hold **Right Alt**, say what you want to
 write, and let go. A moment later the text appears in whatever window you're
 using (terminal, browser, editor, chat), with punctuation and capitals.
 
@@ -62,7 +62,7 @@ Dictation tools tend to break quietly. Murmur is designed not to:
 
 ## Requirements
 
-- [COSMIC desktop](https://system76.com/cosmic) on Wayland, with PipeWire
+- The [COSMIC™ desktop](https://system76.com/cosmic) on Wayland, with PipeWire
 - `wtype` and `wl-clipboard` (bundled in the Flatpak)
 - Your user in the `input` group, so Murmur can see the push-to-talk key:
   ```sh
@@ -227,6 +227,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how to send changes.
 - [wtype](https://github.com/atx/wtype)
 
 ## License
+
+COSMIC is a trademark of System76, Inc. Murmur is an independent
+project and is not affiliated with or endorsed by System76.
+
 
 [MIT](LICENSE). The speech models are © NVIDIA and licensed under
 [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/); Murmur downloads
