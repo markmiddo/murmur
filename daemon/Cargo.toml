@@ -1,0 +1,27 @@
+[package]
+name = "murmurd"
+description = "Murmur dictation engine: hold a key, speak, and it types."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[dependencies]
+murmur-common.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+zbus.workspace = true
+tokio.workspace = true
+evdev = "0.13"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+parakeet-rs = { version = "0.3.8", default-features = false, features = ["cpu", "api-28"] }
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-rustls", "copy-dylibs", "api-28"] }
+regex = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+hound = "3"
+

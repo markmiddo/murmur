@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=Murmur
+Comment=Hold a key, speak, and your words are typed. Private, on-device dictation.
+Type=Application
+Exec=murmur-applet
+Terminal=false
+Categories=Utility;Accessibility;X-COSMIC;
+Keywords=COSMIC;Applet;Dictation;Voice;Speech;Typing;Transcription;
+Icon=io.github.markmiddo.Murmur
+StartupNotify=false
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicHoverPopup=Auto
+X-HostWaylandDisplay=true

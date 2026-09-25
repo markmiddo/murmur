@@ -1,0 +1,16 @@
+[Unit]
+Description=Murmur voice dictation engine
+PartOf=graphical-session.target
+After=graphical-session.target
+# Never give up restarting.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/murmurd
+# Exit code 0 means "another instance already owns the bus name": don't loop.
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

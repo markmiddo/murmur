@@ -1,0 +1,5 @@
+/target
+*.onnx
+/build-flatpak
+/.flatpak-builder
+/build-flatpak-repo

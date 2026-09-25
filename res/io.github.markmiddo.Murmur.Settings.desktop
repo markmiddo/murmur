@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Murmur
+GenericName=Voice Dictation
+Comment=Settings for Murmur voice dictation
+Type=Application
+Exec=murmur-settings
+Terminal=false
+Categories=Utility;Accessibility;
+Keywords=dictation;voice;speech;typing;transcription;
+Icon=io.github.markmiddo.Murmur
+StartupNotify=true
+StartupWMClass=io.github.markmiddo.Murmur.Settings

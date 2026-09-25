@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.markmiddo.Murmur</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Murmur</name>
+  <summary>Private voice dictation for your panel</summary>
+  <developer id="io.github.markmiddo">
+    <name>Mark Middo</name>
+  </developer>
+  <description>
+    <p>
+      Murmur puts voice dictation in your COSMIC panel. Hold Right Alt, say what
+      you want to write, and let go. Your words are typed into whatever window
+      you are using, with punctuation and capitals.
+    </p>
+    <p>
+      Speech recognition runs entirely on your computer using NVIDIA Parakeet.
+      Nothing you say leaves your machine, and there is no account, no
+      subscription and no GPU required.
+    </p>
+    <ul>
+      <li>Push-to-talk on Right Alt or any key you choose</li>
+      <li>Types into any app, with punctuation and capitals</li>
+      <li>Fast on-device transcription, typically under half a second</li>
+      <li>Live level meter in the panel while you speak</li>
+      <li>Recent dictations one click from the clipboard</li>
+      <li>Word replacements for names and jargon</li>
+      <li>English and 25-language speech models</li>
+      <li>Recovers on its own when keyboards, microphones or the engine drop out</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.markmiddo.Murmur.Settings.desktop</launchable>
+  <url type="homepage">https://github.com/markmiddo/murmur</url>
+  <url type="bugtracker">https://github.com/markmiddo/murmur/issues</url>
+  <url type="vcs-browser">https://github.com/markmiddo/murmur</url>
+  <url type="contribute">https://github.com/markmiddo/murmur/blob/main/CONTRIBUTING.md</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Settings: hotkey, speech model, sounds and word replacements</caption>
+      <image>https://raw.githubusercontent.com/markmiddo/murmur/main/docs/screenshots/settings.png</image>
+    </screenshot>
+  </screenshots>
+  <branding>
+    <color type="primary" scheme_preference="light">#d8c9ff</color>
+    <color type="primary" scheme_preference="dark">#4b2a8c</color>
+  </branding>
+  <content_rating type="oars-1.1"/>
+  <recommends>
+    <control>keyboard</control>
+    <display_length compare="ge">360</display_length>
+  </recommends>
+  <supports>
+    <control>pointing</control>
+  </supports>
+  <provides>
+    <id>io.github.markmiddo.Murmur.desktop</id>
+    <binary>murmurd</binary>
+    <binary>murmur-applet</binary>
+    <binary>murmur-settings</binary>
+    <dbus type="user">io.github.markmiddo.Murmur</dbus>
+  </provides>
+  <categories>
+    <category>Utility</category>
+    <category>Accessibility</category>
+  </categories>
+  <keywords>
+    <keyword>dictation</keyword>
+    <keyword>voice</keyword>
+    <keyword>speech</keyword>
+    <keyword>speech to text</keyword>
+    <keyword>transcription</keyword>
+    <keyword>applet</keyword>
+    <keyword>COSMIC</keyword>
+  </keywords>
+  <releases>
+    <release version="0.1.0" date="2026-09-26">
+      <url type="details">https://github.com/markmiddo/murmur/releases/tag/v0.1.0</url>
+      <description>
+        <p>First release.</p>
+        <ul>
+          <li>Push-to-talk dictation typed into the focused window</li>
+          <li>On-device Parakeet speech models, English and multilingual</li>
+          <li>COSMIC panel applet with live level meter and recent dictations</li>
+          <li>Settings window with word replacements</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -1,0 +1,26 @@
+[package]
+name = "murmur-applet"
+description = "COSMIC panel applet for Murmur voice dictation."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+authors.workspace = true
+
+[dependencies]
+murmur-common.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+zbus.workspace = true
+tokio.workspace = true
+futures = "0.3"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic"
+default-features = false
+features = ["applet", "applet-token", "tokio", "wayland", "winit", "multi-window", "process"]
