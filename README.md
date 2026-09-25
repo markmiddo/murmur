@@ -1,12 +1,6 @@
 <div align="center">
 
-<img src="res/icons/hicolor/scalable/apps/io.github.markmiddo.Murmur.svg" width="112" alt="Murmur icon">
-
-# Murmur
-
-**Hold a key, speak, let go. Your words are typed wherever your cursor is.**
-
-Private, on-device voice dictation for the COSMIC desktop.
+<img src="docs/social-preview.png" alt="Murmur: hold a key, speak, it types" width="100%">
 
 [![CI](https://github.com/markmiddo/murmur/actions/workflows/ci.yml/badge.svg)](https://github.com/markmiddo/murmur/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/markmiddo/murmur)](https://github.com/markmiddo/murmur/releases/latest)
@@ -27,9 +21,12 @@ Speech recognition runs entirely on your machine using NVIDIA's
 you say is sent anywhere. There's no account, no subscription and no GPU
 required: a few seconds of speech is transcribed in 100–400 ms on a desktop CPU.
 
-<div align="center">
-<img src="docs/screenshots/settings.png" width="560" alt="Murmur settings window">
-</div>
+<table>
+  <tr>
+    <td width="50%" align="center"><img src="docs/screenshots/popup.png" alt="Murmur panel applet popup"><br><sub>The panel applet</sub></td>
+    <td width="50%" align="center"><img src="docs/screenshots/settings.png" alt="Murmur settings window"><br><sub>Settings</sub></td>
+  </tr>
+</table>
 
 ## Features
 

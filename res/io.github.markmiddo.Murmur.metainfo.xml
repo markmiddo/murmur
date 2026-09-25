@@ -37,6 +37,10 @@
   <url type="contribute">https://github.com/markmiddo/murmur/blob/main/CONTRIBUTING.md</url>
   <screenshots>
     <screenshot type="default">
+      <caption>The panel applet: status, recent dictations and quick controls</caption>
+      <image>https://raw.githubusercontent.com/markmiddo/murmur/main/docs/screenshots/popup.png</image>
+    </screenshot>
+    <screenshot>
       <caption>Settings: hotkey, speech model, sounds and word replacements</caption>
       <image>https://raw.githubusercontent.com/markmiddo/murmur/main/docs/screenshots/settings.png</image>
     </screenshot>
