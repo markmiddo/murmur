@@ -4,15 +4,26 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Weekly, to catch new advisories and toolchain breakage early.
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   check:
+    name: Build, lint and test
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install system libraries
         run: |
@@ -34,10 +45,22 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
-  metadata:
+  audit:
+    name: Security audit
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Check dependencies for known vulnerabilities
+        run: cargo audit
+
+  metadata:
+    name: Store metadata
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
 
       - name: Install validators
         run: |
@@ -47,5 +70,8 @@ jobs:
       - name: Desktop entries
         run: desktop-file-validate res/*.desktop
 
-      - name: Store metadata
+      - name: AppStream metadata
         run: appstreamcli validate --no-net res/io.github.markmiddo.Murmur.metainfo.xml
+
+      - name: Flatpak manifest is valid JSON
+        run: python3 -m json.tool flatpak/io.github.markmiddo.Murmur.json > /dev/null

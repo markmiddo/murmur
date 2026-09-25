@@ -9,6 +9,7 @@
 Private, on-device voice dictation for the COSMIC desktop.
 
 [![CI](https://github.com/markmiddo/murmur/actions/workflows/ci.yml/badge.svg)](https://github.com/markmiddo/murmur/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/markmiddo/murmur)](https://github.com/markmiddo/murmur/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platform: COSMIC](https://img.shields.io/badge/desktop-COSMIC-8b5cf6.svg)
 ![Rust](https://img.shields.io/badge/rust-2024-orange.svg)
@@ -73,6 +74,20 @@ Dictation tools tend to break quietly. Murmur is designed not to:
 - About 700 MB of disk for the speech model, downloaded on first run
 
 ## Install
+
+### Download a release
+
+Grab the latest `murmur-*-x86_64-linux.tar.gz` from
+[Releases](https://github.com/markmiddo/murmur/releases), then:
+
+```sh
+tar xzf murmur-*-x86_64-linux.tar.gz
+cd murmur-*-x86_64-linux
+./install.sh
+```
+
+It installs to `~/.local` for your user and starts the engine. Remove it any
+time with `./uninstall.sh`.
 
 ### Flatpak
 
