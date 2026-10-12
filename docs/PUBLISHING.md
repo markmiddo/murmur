@@ -31,7 +31,9 @@ which the COSMIC Store reads.
 
 ## Notes for reviewers
 
-- `--device=input` lets Murmur read the push-to-talk key globally. Wayland has
+- `--device=all` lets Murmur read the push-to-talk key globally from `/dev/input`.
+  (`--device=input` is narrower but needs Flatpak 1.15.6+, which the
+  cosmic-flatpak CI lacks.) Wayland has
   no hold-to-talk global shortcut API yet, and the Global Shortcuts portal only
   reports activation, not release. Murmur only acts on the configured key.
 - `--share=network` downloads the speech model (about 660 MB) on first run
