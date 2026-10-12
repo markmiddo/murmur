@@ -142,6 +142,7 @@ launcher, or **Settings…** in the popup. It's stored as plain TOML in
 
 ```toml
 hotkey = "KEY_RIGHTALT"          # any Linux key name, e.g. KEY_F13
+assistant_hotkey = ""            # optional second key for a voice assistant; "" = off
 model = "parakeet-tdt-0.6b-v2"   # or parakeet-tdt-0.6b-v3 for multilingual
 sounds = true
 trailing_space = true            # join back-to-back dictations
@@ -155,6 +156,28 @@ min_hold_ms = 250                # ignore accidental taps
 ```
 
 After editing the file by hand, run `systemctl --user restart murmurd`.
+
+### Use with Synthia (assistant key)
+
+Set `assistant_hotkey` (or pick **Assistant key** in Settings) to a second key,
+for example `KEY_RIGHTCTRL`. Holding it records and transcribes exactly like
+dictation (same model, replacements and filler removal), but the text is
+**not typed** and **not added to history**. It is sent over D-Bus instead, so a
+voice assistant like Synthia can use Murmur's fast Parakeet model rather than
+running its own speech-to-text. It must differ from `hotkey`; if it doesn't, or
+isn't a valid key name, it is ignored. Only one key records at a time, and
+pressing the other key while one is held does nothing.
+
+On the `io.github.markmiddo.Murmur1` interface (path `/io/github/markmiddo/Murmur`):
+
+| Signal | Meaning |
+| --- | --- |
+| `AssistantStarted()` | Recording started |
+| `AssistantTranscribed(text: s)` | Final text. Empty means nothing was heard |
+| `AssistantCancelled()` | Turn ended with no text (cancelled, too short, error) |
+
+The read-only property `AssistantHotkey` holds the key's label (empty when off).
+Each turn logs one line with the milliseconds from key release to text.
 
 ## How it works
 

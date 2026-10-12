@@ -4,6 +4,16 @@ All notable changes to Murmur are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+
+- Optional assistant key (`assistant_hotkey`, also in Settings). Holding it
+  transcribes with the same model but sends the text over D-Bus
+  (`AssistantStarted`, `AssistantTranscribed`, `AssistantCancelled` signals and
+  an `AssistantHotkey` property) instead of typing it, so a voice assistant
+  such as Synthia can reuse Murmur's speech-to-text.
+
 ## [0.1.1] - 2026-09-26
 
 ### Changed
