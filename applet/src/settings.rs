@@ -50,6 +50,7 @@ pub struct SettingsApp {
     repl_generation: u64,
 
     hotkey_labels: Vec<String>,
+    assistant_labels: Vec<String>,
     model_labels: Vec<String>,
     tail_labels: Vec<String>,
     hold_labels: Vec<String>,
@@ -59,6 +60,7 @@ pub struct SettingsApp {
 pub enum Message {
     Engine(Update),
     Hotkey(usize),
+    AssistantHotkey(usize),
     Model(usize),
     Sounds(bool),
     TrailingSpace(bool),
@@ -122,6 +124,18 @@ impl SettingsApp {
 
     fn hotkey_index(&self) -> Option<usize> {
         HOTKEYS.iter().position(|(k, _)| *k == self.cfg.hotkey)
+    }
+
+    /// Index into `assistant_labels`: 0 is "Off", then the same keys as `HOTKEYS`.
+    fn assistant_index(&self) -> Option<usize> {
+        if self.cfg.assistant_hotkey.trim().is_empty() {
+            Some(0)
+        } else {
+            HOTKEYS
+                .iter()
+                .position(|(k, _)| *k == self.cfg.assistant_hotkey)
+                .map(|i| i + 1)
+        }
     }
 
     fn engine_status(&self) -> Element<'_, Message> {
@@ -196,6 +210,9 @@ impl cosmic::Application for SettingsApp {
             config_error,
             repl_generation: 0,
             hotkey_labels: HOTKEYS.iter().map(|(_, l)| l.to_string()).collect(),
+            assistant_labels: std::iter::once("Off".to_string())
+                .chain(HOTKEYS.iter().map(|(_, l)| l.to_string()))
+                .collect(),
             model_labels: MODELS.iter().map(|m| m.name.to_string()).collect(),
             tail_labels: TAIL_MS
                 .iter()
@@ -238,6 +255,13 @@ impl cosmic::Application for SettingsApp {
             Message::Hotkey(i) => {
                 let value = HOTKEYS[i].0.to_string();
                 return self.apply(move |c| c.hotkey = value);
+            }
+            Message::AssistantHotkey(i) => {
+                let value = i
+                    .checked_sub(1)
+                    .map(|n| HOTKEYS[n].0.to_string())
+                    .unwrap_or_default();
+                return self.apply(move |c| c.assistant_hotkey = value);
             }
             Message::Model(i) => {
                 let value = MODELS[i].id.to_string();
@@ -346,6 +370,18 @@ impl cosmic::Application for SettingsApp {
                         &self.hotkey_labels,
                         self.hotkey_index(),
                         Message::Hotkey,
+                    )),
+            )
+            .add(
+                settings::item::builder("Assistant key")
+                    .description(
+                        "Optional. Hold it to talk to a voice assistant such as Synthia. \
+                         The words are sent to it, not typed.",
+                    )
+                    .control(dropdown(
+                        &self.assistant_labels,
+                        self.assistant_index(),
+                        Message::AssistantHotkey,
                     )),
             )
             .add(
