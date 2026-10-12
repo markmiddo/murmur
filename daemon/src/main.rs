@@ -5,7 +5,7 @@ mod engine;
 mod hotkey;
 mod output;
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -18,6 +18,7 @@ use zbus::object_server::{InterfaceRef, SignalEmitter};
 
 use crate::audio::{Audio, Tone};
 use crate::engine::Engine;
+use crate::hotkey::{Keys, Slot};
 use crate::output::{Delivery, Replacer};
 
 const HISTORY_LEN: usize = 20;
@@ -28,8 +29,8 @@ const MAX_RECORDING: Duration = Duration::from_secs(300);
 /// Everything that can happen, funnelled into one controller loop.
 #[derive(Debug)]
 pub enum Event {
-    HotkeyDown,
-    HotkeyUp,
+    HotkeyDown(Slot),
+    HotkeyUp(Slot),
     OtherKey,
     KeyboardsMissing(String),
     KeyboardsOk,
@@ -63,6 +64,7 @@ struct Status {
     enabled: bool,
     model: String,
     hotkey: String,
+    assistant_hotkey: String,
     history: VecDeque<(i64, String)>,
 }
 
@@ -105,6 +107,12 @@ impl Service {
         self.status.lock().unwrap().hotkey.clone()
     }
 
+    /// Label of the assistant key, e.g. "Right Ctrl". Empty when it is off.
+    #[zbus(property)]
+    fn assistant_hotkey(&self) -> String {
+        self.status.lock().unwrap().assistant_hotkey.clone()
+    }
+
     /// Recent transcripts as (unix time, text), newest first.
     fn history(&self) -> Vec<(i64, String)> {
         self.status
@@ -139,12 +147,81 @@ impl Service {
 
     #[zbus(signal)]
     async fn transcribed(emitter: &SignalEmitter<'_>, text: &str) -> zbus::Result<()>;
+
+    /// The assistant key went down and recording started.
+    #[zbus(signal)]
+    async fn assistant_started(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
+
+    /// Final text for an assistant turn. Empty means nothing was heard.
+    #[zbus(signal)]
+    async fn assistant_transcribed(emitter: &SignalEmitter<'_>, text: &str) -> zbus::Result<()>;
+
+    /// The assistant turn ended without text (cancelled, too short or failed).
+    #[zbus(signal)]
+    async fn assistant_cancelled(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
+}
+
+/// What a pressed key does when the controller already has a recording.
+#[derive(Debug, PartialEq, Eq)]
+enum KeyAction {
+    Start,
+    /// The previous recording is only in its release tail: wrap it up, then start.
+    FinishThenStart,
+    /// Another recording is live (either key): the press is ignored.
+    Ignore,
+}
+
+/// `active` is `Some(finishing)` when a recording exists. Only one recording
+/// exists at a time, whichever key started it.
+fn key_down_action(active: Option<bool>) -> KeyAction {
+    match active {
+        None => KeyAction::Start,
+        Some(true) => KeyAction::FinishThenStart,
+        Some(false) => KeyAction::Ignore,
+    }
+}
+
+/// A release only ends the recording that the same key started.
+fn key_up_releases(rec: Option<(Slot, bool)>, released: Slot) -> bool {
+    rec.is_some_and(|(slot, from_hotkey)| from_hotkey && slot == released)
+}
+
+/// Another key cancels a live, still-held hotkey recording (either key).
+fn other_key_cancels(cancel_on_other_key: bool, rec: Option<(bool, bool)>) -> bool {
+    cancel_on_other_key && rec.is_some_and(|(from_hotkey, finishing)| from_hotkey && !finishing)
+}
+
+/// Where a finished transcript goes.
+#[derive(Debug, PartialEq, Eq)]
+enum Route {
+    /// Typed into the focused window, kept in history, `Transcribed` signal.
+    Type(String),
+    /// Only the `AssistantTranscribed` signal (empty text is still sent).
+    Assistant(String),
+}
+
+fn route_text(slot: Slot, text: String) -> Option<Route> {
+    match slot {
+        Slot::Dictation if text.is_empty() => None,
+        Slot::Dictation => Some(Route::Type(text)),
+        Slot::Assistant => Some(Route::Assistant(text)),
+    }
+}
+
+/// Assistant signals queued by the synchronous recording code and emitted in
+/// order once the event has been handled.
+#[derive(Debug, PartialEq, Eq)]
+enum Outgoing {
+    Started,
+    Transcribed(String),
+    Cancelled,
 }
 
 struct Recording {
     started: Instant,
     released: Option<Instant>,
     seq: u64,
+    slot: Slot,
     from_hotkey: bool,
     finishing: bool,
 }
@@ -168,6 +245,9 @@ struct Controller {
     recording: Option<Recording>,
     next_seq: u64,
     pending: usize,
+    /// In-flight transcriptions: which key started them and when it was released.
+    turns: HashMap<u64, (Slot, Option<Instant>)>,
+    outbox: Vec<Outgoing>,
     level: f64,
     last_error: Option<(String, Instant)>,
 }
@@ -203,6 +283,9 @@ impl Controller {
             enabled: self.enabled,
             model: self.cfg.model.clone(),
             hotkey: key,
+            assistant_hotkey: hotkey::parse_assistant_key(&self.cfg)
+                .map(|_| hotkey_label(self.cfg.assistant_key().unwrap_or_default()))
+                .unwrap_or_default(),
             history: self.status.lock().unwrap().history.clone(),
         }
     }
@@ -235,24 +318,25 @@ impl Controller {
         if old.hotkey != new.hotkey {
             let _ = iface.hotkey_changed(em).await;
         }
+        if old.assistant_hotkey != new.assistant_hotkey {
+            let _ = iface.assistant_hotkey_changed(em).await;
+        }
     }
 
-    fn start_recording(&mut self, from_hotkey: bool) {
+    fn start_recording(&mut self, slot: Slot, from_hotkey: bool) {
         if !self.enabled {
             return;
         }
         // Pressed again during the release tail: wrap up the previous
         // dictation now so this press gets a recording of its own.
-        if let Some(seq) = self
-            .recording
-            .as_ref()
-            .filter(|r| r.finishing)
-            .map(|r| r.seq)
-        {
-            self.finish(seq);
-        }
-        if self.recording.is_some() {
-            return;
+        match key_down_action(self.recording.as_ref().map(|r| r.finishing)) {
+            KeyAction::Ignore => return,
+            KeyAction::FinishThenStart => {
+                if let Some(seq) = self.recording.as_ref().map(|r| r.seq) {
+                    self.finish(seq);
+                }
+            }
+            KeyAction::Start => {}
         }
         if !self.model_ready {
             self.fail("Speech model is still loading");
@@ -269,9 +353,13 @@ impl Controller {
                     started: Instant::now(),
                     released: None,
                     seq: self.next_seq,
+                    slot,
                     from_hotkey,
                     finishing: false,
                 });
+                if slot == Slot::Assistant {
+                    self.outbox.push(Outgoing::Started);
+                }
                 let (seq, tx) = (self.next_seq, self.events.clone());
                 tokio::spawn(async move {
                     tokio::time::sleep(MAX_RECORDING).await;
@@ -310,6 +398,7 @@ impl Controller {
         let held = rec.released.unwrap_or_else(Instant::now) - rec.started;
         let mut samples = self.audio.stop();
         if held < Duration::from_millis(self.cfg.min_hold_ms) {
+            self.assistant_ended(rec.slot);
             return; // accidental tap
         }
         let got = Duration::from_secs_f32(samples.len() as f32 / audio::TARGET_RATE as f32);
@@ -318,6 +407,7 @@ impl Controller {
         if got < recorded.mul_f32(0.5) {
             tracing::warn!("Microphone delivered {got:?} of {recorded:?}");
             self.fail("Microphone didn't pick anything up. Check your input device.");
+            self.assistant_ended(rec.slot);
             return;
         }
         // Blank the start chime so the model never "hears" it as a word.
@@ -329,11 +419,20 @@ impl Controller {
             self.audio.tone(Tone::Stop);
         }
         self.pending += 1;
+        self.turns.insert(rec.seq, (rec.slot, rec.released));
         self.engine.transcribe(rec.seq, samples);
     }
 
+    /// An assistant turn ended with no text: tell the client so it can reset.
+    fn assistant_ended(&mut self, slot: Slot) {
+        if slot == Slot::Assistant {
+            self.outbox.push(Outgoing::Cancelled);
+        }
+    }
+
     fn cancel(&mut self) {
-        if self.recording.take().is_some() {
+        if let Some(rec) = self.recording.take() {
+            self.assistant_ended(rec.slot);
             let _ = self.audio.stop();
             if self.cfg.sounds {
                 self.audio.tone(Tone::Cancel);
@@ -355,16 +454,45 @@ impl Controller {
         });
     }
 
-    async fn deliver(&mut self, text: String) {
-        let text = if self.cfg.remove_fillers {
-            output::strip_fillers(&text)
-        } else {
-            text
-        };
-        let mut text = self.replacer.apply(&text);
-        if text.is_empty() {
-            return;
+    /// Emit any queued assistant signals, oldest first.
+    async fn flush(&mut self) {
+        for out in std::mem::take(&mut self.outbox) {
+            let em = self.iface.signal_emitter();
+            let _ = match out {
+                Outgoing::Started => Service::assistant_started(em).await,
+                Outgoing::Transcribed(text) => Service::assistant_transcribed(em, &text).await,
+                Outgoing::Cancelled => Service::assistant_cancelled(em).await,
+            };
         }
+    }
+
+    /// Filler removal and word replacements, shared by both keys.
+    fn clean(&self, text: &str) -> String {
+        let text = if self.cfg.remove_fillers {
+            output::strip_fillers(text)
+        } else {
+            text.to_string()
+        };
+        self.replacer.apply(&text)
+    }
+
+    async fn deliver(&mut self, slot: Slot, released: Option<Instant>, text: String) {
+        let text = self.clean(&text);
+        let mut text = match route_text(slot, text) {
+            None => return,
+            Some(Route::Assistant(text)) => {
+                self.outbox.push(Outgoing::Transcribed(text));
+                self.flush().await;
+                if let Some(at) = released {
+                    tracing::info!(
+                        "Assistant turn: {} ms from release to text",
+                        at.elapsed().as_millis()
+                    );
+                }
+                return;
+            }
+            Some(Route::Type(text)) => text,
+        };
         {
             let mut s = self.status.lock().unwrap();
             s.history
@@ -393,8 +521,8 @@ impl Controller {
 
     fn apply_config(&mut self, cfg: Config) {
         let model_changed = cfg.model != self.cfg.model;
-        if cfg.hotkey != self.cfg.hotkey {
-            self.listener.set_key(hotkey::parse_key(&cfg.hotkey));
+        if cfg.hotkey != self.cfg.hotkey || cfg.assistant_hotkey != self.cfg.assistant_hotkey {
+            self.listener.set_keys(Keys::from_config(&cfg));
         }
         self.replacer = Replacer::new(&cfg.replacements);
         self.cfg = cfg;
@@ -413,19 +541,19 @@ impl Controller {
 
     async fn handle(&mut self, ev: Event) {
         match ev {
-            Event::HotkeyDown => self.start_recording(true),
-            Event::HotkeyUp => {
-                if self.recording.as_ref().is_some_and(|r| r.from_hotkey) {
+            Event::HotkeyDown(slot) => self.start_recording(slot, true),
+            Event::HotkeyUp(slot) => {
+                let rec = self.recording.as_ref().map(|r| (r.slot, r.from_hotkey));
+                if key_up_releases(rec, slot) {
                     self.release();
                 }
             }
             Event::OtherKey => {
-                if self.cfg.cancel_on_other_key
-                    && self
-                        .recording
-                        .as_ref()
-                        .is_some_and(|r| r.from_hotkey && !r.finishing)
-                {
+                let rec = self
+                    .recording
+                    .as_ref()
+                    .map(|r| (r.from_hotkey, r.finishing));
+                if other_key_cancels(self.cfg.cancel_on_other_key, rec) {
                     self.cancel();
                 }
             }
@@ -454,11 +582,15 @@ impl Controller {
                 self.model_ready = false;
                 self.model_state = (State::Error, format!("Speech model failed: {err}"));
             }
-            Event::Transcribed { seq: _, result } => {
+            Event::Transcribed { seq, result } => {
                 self.pending = self.pending.saturating_sub(1);
+                let (slot, released) = self.turns.remove(&seq).unwrap_or((Slot::Dictation, None));
                 match result {
-                    Ok(text) => self.deliver(text).await,
-                    Err(err) => self.fail(&format!("Transcription failed: {err}")),
+                    Ok(text) => self.deliver(slot, released, text).await,
+                    Err(err) => {
+                        self.fail(&format!("Transcription failed: {err}"));
+                        self.assistant_ended(slot);
+                    }
                 }
             }
             Event::FinishRecording(seq) => self.finish(seq),
@@ -476,7 +608,7 @@ impl Controller {
                 if self.recording.is_some() {
                     self.release();
                 } else {
-                    self.start_recording(false);
+                    self.start_recording(Slot::Dictation, false);
                 }
             }
             Event::SetEnabled(on) => {
@@ -501,6 +633,7 @@ impl Controller {
                 });
             }
         }
+        self.flush().await;
         self.publish().await;
     }
 }
@@ -545,7 +678,7 @@ async fn run() -> Result<()> {
 
     let audio = Audio::new(tx.clone());
     let engine = Engine::spawn(tx.clone());
-    let listener = hotkey::Listener::spawn(hotkey::parse_key(&cfg.hotkey), tx.clone());
+    let listener = hotkey::Listener::spawn(Keys::from_config(&cfg), tx.clone());
 
     let mut ctl = Controller {
         replacer: Replacer::new(&cfg.replacements),
@@ -565,6 +698,8 @@ async fn run() -> Result<()> {
         recording: None,
         next_seq: 0,
         pending: 0,
+        turns: HashMap::new(),
+        outbox: Vec::new(),
         level: 0.0,
         last_error: None,
     };
@@ -574,6 +709,12 @@ async fn run() -> Result<()> {
         "Murmur ready. Hold {} to dictate.",
         hotkey_label(&ctl.cfg.hotkey)
     );
+    if let Some(code) = hotkey::parse_assistant_key(&ctl.cfg) {
+        tracing::info!(
+            "Assistant key: hold {} to send speech to the assistant instead of typing.",
+            hotkey_label(&format!("{code:?}"))
+        );
+    }
 
     let mut watchdog = tokio::time::interval(Duration::from_secs(5));
     loop {
@@ -630,5 +771,61 @@ fn main() {
     if let Err(err) = rt.block_on(run()) {
         tracing::error!("{err:#}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_down_is_ignored_while_either_key_is_held() {
+        assert_eq!(key_down_action(None), KeyAction::Start);
+        assert_eq!(key_down_action(Some(false)), KeyAction::Ignore);
+        assert_eq!(key_down_action(Some(true)), KeyAction::FinishThenStart);
+    }
+
+    #[test]
+    fn key_up_only_releases_its_own_recording() {
+        let live = Some((Slot::Assistant, true));
+        assert!(key_up_releases(live, Slot::Assistant));
+        assert!(!key_up_releases(live, Slot::Dictation));
+        assert!(!key_up_releases(
+            Some((Slot::Dictation, true)),
+            Slot::Assistant
+        ));
+        // A "Dictate now" recording (not from a key) ignores key releases.
+        assert!(!key_up_releases(
+            Some((Slot::Dictation, false)),
+            Slot::Dictation
+        ));
+        assert!(!key_up_releases(None, Slot::Dictation));
+    }
+
+    #[test]
+    fn other_key_cancel_rules() {
+        assert!(other_key_cancels(true, Some((true, false))));
+        assert!(!other_key_cancels(false, Some((true, false))));
+        assert!(!other_key_cancels(true, Some((true, true)))); // already released
+        assert!(!other_key_cancels(true, Some((false, false)))); // manual
+        assert!(!other_key_cancels(true, None));
+    }
+
+    #[test]
+    fn signal_choice_by_key() {
+        assert_eq!(
+            route_text(Slot::Dictation, "hello".into()),
+            Some(Route::Type("hello".into()))
+        );
+        assert_eq!(route_text(Slot::Dictation, String::new()), None);
+        assert_eq!(
+            route_text(Slot::Assistant, "hello".into()),
+            Some(Route::Assistant("hello".into()))
+        );
+        // Empty assistant text still goes out so the client can reset.
+        assert_eq!(
+            route_text(Slot::Assistant, String::new()),
+            Some(Route::Assistant(String::new()))
+        );
     }
 }
