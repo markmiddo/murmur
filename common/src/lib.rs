@@ -137,6 +137,11 @@ pub fn config_path() -> PathBuf {
 pub struct Config {
     /// Linux input key name held to dictate, e.g. "KEY_RIGHTALT".
     pub hotkey: String,
+    /// Optional second key for a voice assistant (e.g. Synthia). Holding it
+    /// records and transcribes like `hotkey`, but the text is sent over D-Bus
+    /// (`AssistantTranscribed`) instead of being typed. Empty means off, and it
+    /// must differ from `hotkey`.
+    pub assistant_hotkey: String,
     /// Model id from [`MODELS`].
     pub model: String,
     /// Play short start/stop tones.
@@ -160,6 +165,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             hotkey: "KEY_RIGHTALT".into(),
+            assistant_hotkey: String::new(),
             model: MODELS[0].id.into(),
             sounds: true,
             trailing_space: true,
@@ -173,6 +179,14 @@ impl Default for Config {
 }
 
 impl Config {
+    /// The assistant key name, or None when it is off (blank) or the same as
+    /// the dictation key (the dictation key wins). Whether the name is a real
+    /// key is checked by the daemon, which knows the evdev key table.
+    pub fn assistant_key(&self) -> Option<&str> {
+        let key = self.assistant_hotkey.trim();
+        (!key.is_empty() && !key.eq_ignore_ascii_case(self.hotkey.trim())).then_some(key)
+    }
+
     /// Load the config, falling back to defaults on any problem. Never fails.
     pub fn load() -> Self {
         Self::try_load().unwrap_or_else(|err| {
@@ -276,5 +290,39 @@ mod tests {
         let cfg: Config = toml::from_str("sounds = false").unwrap();
         assert!(!cfg.sounds);
         assert_eq!(cfg.hotkey, "KEY_RIGHTALT");
+    }
+
+    #[test]
+    fn assistant_hotkey_defaults_off() {
+        let cfg = Config::default();
+        assert_eq!(cfg.assistant_hotkey, "");
+        assert_eq!(cfg.assistant_key(), None);
+        let cfg: Config = toml::from_str("sounds = false").unwrap();
+        assert_eq!(cfg.assistant_key(), None);
+    }
+
+    #[test]
+    fn assistant_hotkey_parses() {
+        let cfg: Config = toml::from_str("assistant_hotkey = \"KEY_RIGHTCTRL\"").unwrap();
+        assert_eq!(cfg.assistant_key(), Some("KEY_RIGHTCTRL"));
+        assert_eq!(cfg.hotkey, "KEY_RIGHTALT");
+    }
+
+    #[test]
+    fn assistant_hotkey_must_differ_from_hotkey() {
+        let cfg: Config = toml::from_str("assistant_hotkey = \"key_rightalt\"").unwrap();
+        assert_eq!(cfg.assistant_key(), None);
+        let cfg: Config = toml::from_str("assistant_hotkey = \"  \"").unwrap();
+        assert_eq!(cfg.assistant_key(), None);
+    }
+
+    #[test]
+    fn assistant_hotkey_round_trips() {
+        let cfg = Config {
+            assistant_hotkey: "KEY_F13".into(),
+            ..Config::default()
+        };
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        assert_eq!(toml::from_str::<Config>(&text).unwrap(), cfg);
     }
 }
